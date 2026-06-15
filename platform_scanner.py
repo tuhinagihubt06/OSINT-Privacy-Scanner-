@@ -13,11 +13,11 @@ platforms = {
 score = 0
 for platform, url in platforms.items():
     try:
-        response = requests.get(url, timeout=5)
+        response = requests.get(url, timeout=3)
     
         if response.status_code == 200:
             print(f"Username '{username}' exists on {platform}.")
-            score+=35
+            score+=40
         else:
             print(f"Username '{username}' does not exist on {platform}.")
             
