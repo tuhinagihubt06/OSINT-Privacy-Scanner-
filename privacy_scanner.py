@@ -1,19 +1,49 @@
 import os 
 from datetime import datetime
 import requests 
+import sqlite3
 
 username = input("Enter a username to scan: ")
+
+# Initialize SQLite database
+conn = sqlite3.connect("scan_history.db")
+cursor = conn.cursor()
+
+# Create table if it doesn't exist
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS scan_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT,
+        username TEXT,
+        score INTEGER,
+        risk TEXT
+    )
+''')  
+conn.commit()
 
 def save_scan_history(username, score, risklevel):
     print("DEBUG: Entered save_scan_history")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
+
+    #save to text file
     with open("scan_history.txt", "a", encoding = "utf-8") as file:
         file.write(
             f"[{timestamp}] Username: {username} |" 
             f"Exposure Score: {score} |"
-            f"Risk Level: {risklevel}\n"
+            f"Risk Level: {risk}\n"
         )
+        
+    #save to SQLite database
+    connection = sqlite3.connect("scan_history.db")
+    cursor = connection.cursor()
+    cursor.execute('''
+        INSERT INTO scan_history (timestamp, username, score, risk)
+        VALUES (?, ?, ?, ?)
+    ''', (timestamp, username, score, risk))
+    connection.commit()
+    connection.close()
+    
+    print("Scan history saved to database.")
         
     print("DEBUG: File write completed")
     print(f"SAVE PATH: {os.path.abspath('scan_history.txt')}")
@@ -67,28 +97,27 @@ for platform, url in platforms.items():
         print(f"Error checking {platform}: Error")
         print(f"Error details: {e}")
         
-print(f"Exposure Score: {score}/100")
+print(f"Exposure Score: {score}/200")
 print(f"Total score for username '{username}': {score}")    
 if score>=75:
-    risklevel = "High"
+    risk = "High"
     print("High exposure risk: The username is widely used across multiple platforms.")
 elif score>=50:
-    risklevel = "Moderate"
+    risk = "Moderate"
     print("Moderate exposure risk: The username is used on several platforms.")
 else:
-    risklevel = "Low"
+    risk = "Low"
     print("Low exposure risk: The username is not widely used across platforms.")
     
-
-risklevel = ""    
-if risklevel == "High":
+        
+if risk == "High":
     print('''Recommendation: Consider changing your username to reduce exposure risk.
           - Use a unique username that is not easily guessable.
           - Remove personal information from your username, such as your real name or birthdate.
           - Regularly review and update your online profiles to ensure they do not contain sensitive information.
           - Use different usernames for different platforms to minimize the risk of cross-platform exposure.''')
 
-elif risklevel == "Moderate":
+elif risk == "Moderate":
     print('''Recommendation: Be cautious with your username and consider the following:
           - Review profile visibility changes.
           - Check linked accounts for any security vulnerabilities.
@@ -100,7 +129,7 @@ else:
           - Use strong, unique passwords for each platform.
           - Enable two-factor authentication where available to enhance account security.''')
     
-save_scan_history(username, score, risklevel)
+save_scan_history(username, score, risk)
 print("Scan history saved.")
 
 view_history = input("Do you want to view your scan history? (yes/no): ").strip().lower()
