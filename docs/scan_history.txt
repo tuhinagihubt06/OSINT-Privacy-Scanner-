@@ -1,0 +1,2 @@
+[2026-07-07 21:24:27] Username: lola | Exposure Score: 175 | Risk Level: High
+[2026-07-07 21:31:05] Username: MichaelFaraday | Exposure Score: 175 | Risk Level: High
