@@ -23,3 +23,7 @@
 [2026-06-24 23:13:26] Username: lulli |Exposure Score: 175 |Risk Level: High
 [2026-06-24 23:14:51] Username: laura |Exposure Score: 150 |Risk Level: High
 [2026-06-24 23:15:42] Username: loda |Exposure Score: 175 |Risk Level: High
+[2026-07-01 12:43:10] Username: lola | Score: 125 | Risk: High
+[2026-07-01 16:05:58] Username: ram | Score: 100 | Risk: Moderate
+[2026-07-10 21:17:57] Username: lola | Exposure Score: 175 | Risk Level: High
+[2026-07-10 21:18:33] Username: rahul | Exposure Score: 175 | Risk Level: High

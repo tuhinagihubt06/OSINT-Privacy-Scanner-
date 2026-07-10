@@ -3,14 +3,37 @@ from datetime import datetime
 import requests 
 import sqlite3
 
-username = input("Enter a username to scan: ")
 
-# Initialize SQLite database
-conn = sqlite3.connect("scan_history.db")
-cursor = conn.cursor()
+DB_PATH = "scan_history.db"
+TXT_PATH = "scan_history.txt"
 
-# Create table if it doesn't exist
-cursor.execute('''
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+}
+
+platforms = {
+    "GitHub": {"url": "https://github.com/{u}", "mode": "status"},
+    "Twitter": {"url": "https://twitter.com/{u}", "mode": "status"}, #Twitter blocks unauthenticated scraping, so we use the standard Twitter URL
+    "Instagram": {"url": "https://instagram.com/{u}", "mode": "status"},
+    "LinkedIn": {"url": "https://linkedin.com/in/{u}", "mode": "status"},
+    "Facebook": {"url": "https://facebook.com/{u}", "mode": "status"},
+    "Reddit": {"url": "https://reddit.com/user/{u}", "mode": "status"},
+    "Pinterest": {"url": "https://pinterest.com/{u}", "mode": "status"},
+    "Medium": {"url": "https://medium.com/@{u}", "mode": "status"}
+}
+
+score_per_hit = 25
+max_score = len(platforms) * score_per_hit
+
+
+
+
+#------Initializing database------#
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
     CREATE TABLE IF NOT EXISTS scan_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp TEXT,
@@ -19,65 +42,101 @@ cursor.execute('''
         risk TEXT
     )
 ''')
-conn.commit()
-conn.close() 
+    conn.commit()
+    conn.close() 
+    
+#------platform existence check------#
 
+def check_platform(session, name, config, username):
+    url = config["url"].format(u=username)
+    mode = config["mode"]
 
-def view_statistics():
-    connection = sqlite3.connect("scan_history.db")
-    cursor = connection.cursor()
-    
-    print("=== DATABASE STATISTICS ===")
-    
-    #total scans
-    cursor.execute('SELECT COUNT(*) FROM scan_history')
-    total_scans = cursor.fetchone()[0]
-    print(f"Total Scans: {total_scans}")
-    
-    #Risk Breakdown
-    cursor.execute('''
-                   SELECT risk, COUNT(*) FROM scan_history
-                   GROUP BY risk
-                   ''')
+    try:
+        response = session.get(url, timeout=3, headers=headers, allow_redirects=True)
 
-    records = cursor.fetchall()
-    print("Risk Breakdown:")
-    
-    for risk, count in records:
-        if risk=="":
-            risk = "No Risk Level Assigned"
-        print(f"Risk: {risk}: {count}")
+        if mode == "status":
+            exists = response.status_code == 200
+
+        elif mode == "status_no_redirect_404":
+            final_url = response.url.rstrip("/")
+            exists = (
+                response.status_code == 200
+                and username.lower() in final_url.lower()
+            )
+
+        elif mode == "json_reddit":
+            exists = False
+            if response.status_code == 200:
+                data = response.json()
+                if "data" in data and "name" in data["data"]:
+                    exists = data["data"]["name"].lower() == username.lower()
+
+        else:
+            print(f"Unknown mode '{mode}' for platform '{name}'")
+            exists = False
+
+        return exists, f"HTTP {response.status_code}"   # <-- always a tuple
+
+    except Exception as e:
+        print(f"Error checking {name}: {e}")
+        return False, f"Request failed: {e}"             # <-- tuple here too
         
-    cursor.execute('''
-                   SELECT username, COUNT(*) as count FROM scan_history
-                   GROUP BY username
-                   ORDER BY count DESC
-                   LIMIT 1
-                     ''')
+    
+def scan_platforms(username):
+    result = []
+    score = 0
+    session = requests.Session()
+    
+    for platform, config in platforms.items():
+        exists, detail = check_platform(session, platform, config, username)
+        result.append((platform, exists, detail))
+        if exists:
+            print(f"Username '{username}' exists on {platform}.")
+            score += score_per_hit
+            print(f"Current Score: {score}")
+        else:
+            print(f"Username '{username}' does not exist on {platform}.")
+    
+    return score, result
 
-    most_frequent_record = cursor.fetchone()
-    if most_frequent_record:
-        most_frequent_username, count = most_frequent_record
-        print(f"Most frequently scanned username: {most_frequent_username} (Scanned {count} times)")
+def calculate_risk(score):
+    if score >= max_score * 0.6:
+        return "High"
+    elif score >= max_score * 0.35:
+        return "Moderate"
     else:
-        print("No scan history found in the database.")
+        return "Low"
+    
+Recommendations = {
+    "High": [
+        "Consider changing your password immediately.",
+        "Review your privacy settings on all platforms."
+    ],
+    "Moderate": [
+        "Be cautious about the information you share online.",
+        "Regularly update your security settings."
+    ],
+    "Low": [
+        "Continue to practice good online hygiene.",
+        "Stay informed about the latest security threats."
+    ]
+}
 
-    connection.close()
+#------Persistence------#
 
 def save_scan_history(username, score, risk):
-    print("DEBUG: Entered save_scan_history")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    #save to text file
-    with open("scan_history.txt", "a", encoding = "utf-8") as file:
+    # Save to text file
+    with open(TXT_PATH, "a", encoding="utf-8") as file:
         file.write(
-            f"[{timestamp}] Username: {username} |" 
-            f"Exposure Score: {score} |"
+            f"[{timestamp}] Username: {username} | "
+            f"Exposure Score: {score} | "
             f"Risk Level: {risk}\n"
         )
         
-    #save to SQLite database
-    connection = sqlite3.connect("scan_history.db")
+    # Save to SQLite database
+    connection = sqlite3.connect(DB_PATH)
     cursor = connection.cursor()
     cursor.execute('''
         INSERT INTO scan_history (timestamp, username, score, risk)
@@ -86,13 +145,46 @@ def save_scan_history(username, score, risk):
     connection.commit()
     connection.close()
     
-    print("Scan history saved to database.")
-        
-    print("DEBUG: File write completed")
-    print(f"SAVE PATH: {os.path.abspath('scan_history.txt')}")
+def view_scan_history():
+    if not os.path.exists(TXT_PATH):
+        print("No scan history available.")
+        return
 
+    with open(TXT_PATH, "r", encoding="utf-8") as file:
+        content = file.read().strip()
+        if not content:
+            print("No scan history available.")
+            return
+        print("=== SCAN HISTORY ===")
+        print(content)
+
+
+def view_database_history(limit=10):
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    cursor.execute('''
+        SELECT username, score, risk, timestamp
+        FROM scan_history
+        ORDER BY timestamp DESC
+        LIMIT ?
+    ''', (limit,))
+    
+    records = cursor.fetchall()
+    if records:
+        print("=== LATEST SCAN HISTORY FROM DATABASE ===")
+        for record in records:
+            print(f"Username: {record[0]} | Score: {record[1]} | Risk: {record[2]} | Timestamp: {record[3]}")
+    else:
+        print("No scan history found in the database.")
+        return
+    print(f"Latest {len(records)} scan(s) displayed: ")
+    for username, score, risk, timestamp in records:
+        print(f"Username: {username} | Score: {score}/100 | Risk: {risk} | Timestamp: {timestamp}")
+    connection.close()
+    
 def search_username_history(username):
-    connection = sqlite3.connect("scan_history.db")
+    connection = sqlite3.connect(DB_PATH)
     cursor = connection.cursor()
     
     cursor.execute('''
@@ -103,138 +195,103 @@ def search_username_history(username):
     ''', (username,))
     
     records = cursor.fetchall()
-    if records:
-        print(f"Scan History for '{username}':")
-        for record in records:
-            print(f"Username: {record[0]} | Score: {record[1]} | Risk: {record[2]} | Timestamp: {record[3]}")
-    else:
+    if not records:
         print(f"No scan history found for '{username}'.")
-    
+        return
+    print(f"Scan history for {username}:")
+    for username, score, risk, timestamp in records:
+        print(f"Username: {username} | Score: {score}/100 | Risk: {risk} | Timestamp: {timestamp}")
     connection.close()
-
-def view_scan_history():
-    try:
-        with open("scan_history.txt", "r", encoding = "utf-8") as file:
-            history = file.read()
-            
-        print(f"DEBUG: history = {repr(history)}")
-        if history.strip():
-            print("\nScan History:")
-            print(history)
-        else:
-            print(f"DEBUG: File exists but is empty.")
-            
-    except FileNotFoundError:
-        print("DEBUG: File not found. No scan history available.")
-    
-    print(f"VIEW PATH: {os.path.abspath('scan_history.txt')}")
     
     
-def view_database_history():
-    connection = sqlite3.connect("scan_history.db")
+def view_statistics():
+    connection = sqlite3.connect(DB_PATH)
     cursor = connection.cursor()
     
-    cursor.execute("""
-                   SELECT username, score, risk, timestamp
-                   FROM scan_history
-                   ORDER BY timestamp DESC
-                   LIMIT 10
-    """)
+    print("=== DATABASE STATISTICS ===")
     
+    cursor.execute('SELECT COUNT(*) FROM scan_history')
+    total_scans = cursor.fetchone()[0]
+    print(f"Total Scans: {total_scans}")
+    
+    cursor.execute('''
+                   SELECT risk, COUNT(*) FROM scan_history
+                   GROUP BY risk
+                   ''')
+
     records = cursor.fetchall()
-    if records:
-        print("Latest Scan History from Database:")
-        for record in records:
-            print(f"Username: {record[0]} | Score: {record[1]} | Risk: {record[2]} | Timestamp: {record[3]}")
-    else:
-        print("No scan history found in the database.")
+    print("Risk Breakdown:")
     
+    for risk, count in records:
+        print(f"{risk or '<No Risk Level Assigned>'}: {count}")
+    
+    cursor.execute('''
+                   SELECT username, COUNT(*) as scan_count
+                     FROM scan_history
+                     GROUP BY username
+                     ORDER BY scan_count DESC
+                     LIMIT 1
+                     ''')
+    top_users = cursor.fetchone()
+    if top_users:
+        print(f"Most frequently scanned username: {top_users[0]} ({top_users[1]} times)")
     connection.close()
-                   
-                   
-platforms = {
-    "GitHub": f"https://github.com/{username}",
-    "Twitter": f"https://twitter.com/{username}",
-    "Instagram": f"https://instagram.com/{username}",
-    "LinkedIn": f"https://linkedin.com/in/{username}",
-    "Facebook": f"https://facebook.com/{username}",
-    "Reddit": f"https://reddit.com/user/{username}",
-    "Pinterest": f"https://pinterest.com/{username}",
-    "Medium": f"https://medium.com/@{username}"
-}
-score = 0
-for platform, url in platforms.items():
-    try:
-        response = requests.get(url, timeout=3)
-    
-        if response.status_code == 200:
-            print(f"Username '{username}' exists on {platform}.")
-            score+=25
-            print(f"Current Score: {score}")
-            
+
+#-----CLI Flow------#
+
+def prompt_user_input(question):
+    return input(question).strip().lower()=='yes'
+
+
+def main():
+    init_db()
+
+    while True:
+        print("\n=== Privacy Scanner ===")
+        print("1. Scan a username")
+        print("2. View scan history (text file)")
+        print("3. View scan history (database)")
+        print("4. Search scan history by username")
+        print("5. View statistics")
+        print("6. Exit")
+
+        choice = input("Enter your choice: ").strip()
+
+        if choice == "1":
+            username = input("Enter the username to scan: ").strip()
+            if not username:
+                print("Username cannot be empty.")
+                continue                          # go back to menu, don't exit
+            score, results = scan_platforms(username)
+            for platform, exists, detail in results:
+                if exists:
+                    print(f"  [FOUND]     {platform}")
+                else:
+                    print(f"  [not found] {platform} ({detail})")
+            risk = calculate_risk(score)
+            save_scan_history(username, score, risk)
+            print(f"\nExposure Score: {score} | Risk Level: {risk}")
+            print(Recommendations[risk])
+
+        elif choice == "2":
+            view_scan_history()
+
+        elif choice == "3":
+            view_database_history()
+
+        elif choice == "4":
+            username = input("Enter the username to search: ").strip()
+            search_username_history(username)
+
+        elif choice == "5":
+            view_statistics()
+
+        elif choice == "6":
+            print("Exiting Privacy Scanner.")
+            break
+
         else:
-            print(f"Username '{username}' does not exist on {platform}.")
-            
-            
-    except Exception as e:
-        print(f"Error checking {platform}: Error")
-        print(f"Error details: {e}")
-        
-print(f"Exposure Score: {score}/200")
-print(f"Total score for username '{username}': {score}")    
-if score>=75:
-    risk = "High"
-    print("High exposure risk: The username is widely used across multiple platforms.")
-elif score>=50:
-    risk = "Moderate"
-    print("Moderate exposure risk: The username is used on several platforms.")
-else:
-    risk = "Low"
-    print("Low exposure risk: The username is not widely used across platforms.")
-    
-        
-if risk == "High":
-    print('''Recommendation: Consider changing your username to reduce exposure risk.
-          - Use a unique username that is not easily guessable.
-          - Remove personal information from your username, such as your real name or birthdate.
-          - Regularly review and update your online profiles to ensure they do not contain sensitive information.
-          - Use different usernames for different platforms to minimize the risk of cross-platform exposure.''')
+            print("Invalid choice. Please try again.")
 
-elif risk == "Moderate":
-    print('''Recommendation: Be cautious with your username and consider the following:
-          - Review profile visibility changes.
-          - Check linked accounts for any security vulnerabilities.
-          - Consider changing your username if it contains personal information or is easily guessable.''')
-
-else:
-    print('''Recommendation: Your username has a low exposure risk, but it's still important to:
-          - Regularly review your online profiles for any sensitive information.
-          - Use strong, unique passwords for each platform.
-          - Enable two-factor authentication where available to enhance account security.''')
-    
-save_scan_history(username, score, risk)
-print("Scan history saved.")
-
-view_history = input("Do you want to view your scan history? (yes/no): ").strip().lower()
-if view_history == "yes":
-    view_database_history()
-else:    
-    print("Scan history not displayed.")
-    
-search_history = input("Do you want to search for a specific username in the scan history? (yes/no): ").strip().lower()
-if search_history == "yes":
-    search_username = input("Enter the username to search for: ").strip()
-    search_username_history(search_username)
-else:
-    print("Search skipped.")
-    
-view_stats = input("Do you want to view database statistics? (yes/no): ").strip().lower()
-if view_stats == "yes":
-    view_statistics()
-else:
-    print("Statistics not displayed.")
-    
-
-
-    
-    
+if __name__ == "__main__":
+    main()
